@@ -65,7 +65,7 @@ def show_particles(r_map, particles, block=True):
     GLOB_SCAT_HANDLE = plt.scatter([p.x for p in particles], [p.y for p in particles], marker='+')
     plt.draw()
     plt.show(block=block)
-    time.sleep(1)
+    time.sleep(0.1)
 
 
 def run_particle_filter(log_file, r_map, num_particles):
@@ -99,7 +99,7 @@ def run_particle_filter(log_file, r_map, num_particles):
             if prev_pose:
                 delta_ts = (timestamp - prev_ts)
                 if lsr_pose.distance_from(prev_pose) < 2 or delta_ts < 2 or timestamp < 15:
-                    print 'Continuing due to lack of movement'
+                    # print 'Continuing due to lack of movement'
                     continue
 
                 print 'delta_ts ', delta_ts
@@ -122,6 +122,8 @@ def run_particle_filter(log_file, r_map, num_particles):
                     np.random.choice(np.array(range(len(new_particles))), size=num_particles,
                                      replace=True, p=weights)
                 particles = [new_particles[_x] for _x in new_particles_idx]
+
+                print 'Mode pose : ', mode([int(np.rad2deg(p.theta)) for p in particles])[0][0]
 
                 # Here we randomly add 1000 particles after every couple of iterations
                 # to prevent the filter from converging to an incorrect value. The existing

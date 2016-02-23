@@ -47,18 +47,23 @@ class MotionModel(object):
         :return:
         :rtype: (RobotPose, confidence)
         """
-        alpha1 = 0.007
-        alpha2 = 0.007
+        alpha1 = 0.005
+        alpha2 = 0.005
         alpha3 = 0.12
         alpha4 = 0.12
 
         # To avoid the standard confusion between matrix indices and x, y coordinates,
         # we declare new variables xa_* and ya_* which represent the coordinates
         # along those axes. The axes are oriented as are normally done in geometry.
-        xa_prev = prev_rf.y
-        xa_curr = curr_rf.y
-        ya_prev = prev_rf.x
-        ya_curr = curr_rf.x
+        # FIXME We should not do this for the odometry frame maybe??
+        # xa_prev = prev_rf.y
+        # xa_curr = curr_rf.y
+        # ya_prev = prev_rf.x
+        # ya_curr = curr_rf.x
+        xa_prev = prev_rf.x
+        xa_curr = curr_rf.x
+        ya_prev = prev_rf.y
+        ya_curr = curr_rf.y
 
         delta_rot1 = norm_ang(math.atan2(ya_curr - ya_prev, xa_curr - xa_prev) - prev_rf.theta)
         delta_trans = np.sqrt((ya_curr - ya_prev) ** 2 + (xa_curr - xa_prev) ** 2)
@@ -84,7 +89,7 @@ class MotionModel(object):
 
 
 class SensorModel(object):
-    ANGLE_GRANULARITY_DEG = 15
+    ANGLE_GRANULARITY_DEG = 10
     MAX_SENSOR_VAL_DM = 200
     SENSOR_MODEL_FILE = 'cache/sensor_model_%s.dat' % ANGLE_GRANULARITY_DEG
     MAP_MODEL_FILE = 'cache/map_model_%s.dat' % ANGLE_GRANULARITY_DEG
@@ -158,7 +163,7 @@ class SensorModel(object):
         laser_idx = int(start_angle - offset_angle)
         assert laser_idx >= 0
 
-        idx_jump = 4  # Every idx_jump * SensorModel.ANGLE_GRANULARITY_DEG degrees
+        idx_jump = 3  # Every idx_jump * SensorModel.ANGLE_GRANULARITY_DEG degrees
         num_measurements = (180 / (angle_granularity * idx_jump)) - 1
 
         prob = 1
@@ -200,7 +205,7 @@ class SensorModel(object):
         # TODO: tweak parameters
         # TODO: The exponential distribution is not looking very nice. Should we try shifting it
         # towards the mean in some way?
-        sigma_hit = 1  # decimeters
+        sigma_hit = 1.2  # decimeters
         lamda_short = 0.03
 
         z_hit = 0.67
