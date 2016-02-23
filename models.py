@@ -9,6 +9,10 @@ import numpy as np
 import scipy.stats
 
 
+def norm_ang(theta):
+    return (theta + np.pi) % (2 * np.pi) - np.pi
+
+
 class RobotPose(object):
     def __init__(self, x, y, theta):
         """
@@ -20,6 +24,14 @@ class RobotPose(object):
         self.x = int(x)
         self.y = int(y)
         self.theta = float(theta)
+        assert -np.pi <= self.theta <= np.pi
+
+    def distance_from(self, other):
+        """
+        :param RobotPose pose:
+        :return: Distance in dm
+        """
+        return np.sqrt((self.x - other.x) ** 2 + (self.y - other.y) ** 2)
 
 
 class MotionModel(object):
@@ -35,10 +47,10 @@ class MotionModel(object):
         :return:
         :rtype: (RobotPose, confidence)
         """
-        alpha1 = 0.13
-        alpha2 = 0.13
-        alpha3 = 0.13
-        alpha4 = 0.13
+        alpha1 = 0.007
+        alpha2 = 0.007
+        alpha3 = 0.12
+        alpha4 = 0.12
 
         # To avoid the standard confusion between matrix indices and x, y coordinates,
         # we declare new variables xa_* and ya_* which represent the coordinates
@@ -48,9 +60,9 @@ class MotionModel(object):
         ya_prev = prev_rf.x
         ya_curr = curr_rf.x
 
-        delta_rot1 = math.atan2(ya_curr - ya_prev, xa_curr - xa_prev) - prev_rf.theta
+        delta_rot1 = norm_ang(math.atan2(ya_curr - ya_prev, xa_curr - xa_prev) - prev_rf.theta)
         delta_trans = np.sqrt((ya_curr - ya_prev) ** 2 + (xa_curr - xa_prev) ** 2)
-        delta_rot2 = curr_rf.theta - prev_rf.theta - delta_rot1
+        delta_rot2 = norm_ang(curr_rf.theta - prev_rf.theta - delta_rot1)
 
         # TODO: Do this in a while loop as done in textbook algo
         sigma_rot1 = alpha1 * delta_rot1 + alpha2 * delta_trans
@@ -63,16 +75,18 @@ class MotionModel(object):
 
         delta_x = int(round(deltah_trans * math.cos(prev_wf.theta + deltah_rot1)))
         delta_y = int(round(deltah_trans * math.sin(prev_wf.theta + deltah_rot1)))
+
+        nxt_theta = norm_ang(prev_wf.theta + deltah_rot1 + deltah_rot2)
         nxt_pose = RobotPose(prev_wf.x - delta_y,  # Note the switch between x and y.
                              prev_wf.y + delta_x,  # This is to maintain sanity in matrix indexing.
-                             prev_wf.theta + deltah_rot1 + deltah_rot2)
+                             nxt_theta)
         return nxt_pose
 
 
 class SensorModel(object):
     ANGLE_GRANULARITY_DEG = 15
     MAX_SENSOR_VAL_DM = 200
-    SENSOR_MODEL_FILE = 'cache/sensor_model.dat'
+    SENSOR_MODEL_FILE = 'cache/sensor_model_%s.dat' % ANGLE_GRANULARITY_DEG
     MAP_MODEL_FILE = 'cache/map_model_%s.dat' % ANGLE_GRANULARITY_DEG
 
     def __init__(self, r_map, bypass_cache=False):
@@ -129,27 +143,39 @@ class SensorModel(object):
         # Assume all rays independent, multiply all probabilities and return result.
         """
 
-        offset_angle = ((pose.theta * 180 / np.pi) - 90 + 360) % 360  # -90 to align laser at center
+        offset_angle = np.rad2deg(pose.theta - np.pi/2)  # -90 to align laser at center
+        offset_angle = (offset_angle + 360) % 360  # We want offset angle between 0 to 360
+        assert 0 <= offset_angle <= 360
+
         mean_dist = self.mean_distances.get((pose.x, pose.y), None)
         if mean_dist is None:
             return 0
-        n = len(mean_dist)
 
+        n = len(mean_dist)
         angle_granularity = SensorModel.ANGLE_GRANULARITY_DEG
-        start_idx = int(offset_angle / angle_granularity) % n
+        start_idx = int(math.ceil(offset_angle / angle_granularity))
         start_angle = start_idx * angle_granularity
         laser_idx = int(start_angle - offset_angle)
-        idx_jump = 4  # Every 60 degrees
+        assert laser_idx >= 0
 
+        idx_jump = 4  # Every idx_jump * SensorModel.ANGLE_GRANULARITY_DEG degrees
         num_measurements = (180 / (angle_granularity * idx_jump)) - 1
+
         prob = 1
         for i in range(num_measurements):
-            prob *= self.sensor_model[int(measurements[laser_idx])][int(mean_dist[start_idx])]
-            start_idx += idx_jump
             start_idx %= n
+            lsr_mnt = min(SensorModel.MAX_SENSOR_VAL_DM, int(measurements[laser_idx]))
+            mean_mnt = int(mean_dist[start_idx])
+            measurement_prob = self.sensor_model[lsr_mnt][mean_mnt]
+
+            # if np.random.randint(0, 1000) % 999 == 0:
+            #     print '------------------'
+            #     print lsr_mnt, mean_mnt, measurement_prob
+            #     print '------------------'
+
+            prob *= measurement_prob
+            start_idx += idx_jump
             laser_idx += (idx_jump * angle_granularity)
-        if prob > 1e-4:
-            a = 1
         return prob
 
     @staticmethod
@@ -174,11 +200,11 @@ class SensorModel(object):
         # TODO: tweak parameters
         # TODO: The exponential distribution is not looking very nice. Should we try shifting it
         # towards the mean in some way?
-        sigma_hit = 10  # decimeters
+        sigma_hit = 1  # decimeters
         lamda_short = 0.03
 
-        z_hit = 0.55
-        z_short = 0.25
+        z_hit = 0.67
+        z_short = 0.13
         z_max = 0.01
         z_rand = 0.19
 
@@ -405,9 +431,11 @@ if __name__ == '__main__':
     # cache_file = 'cache/map_model.dat_%s' % SensorModel.ANGLE_GRANULARITY_DEG
     m = Map.from_file('map/wean.dat', 800, 800)
     sm = SensorModel(m)
-    # visualize_sensor_model(sm)
+    # visualize_map_model(sm)
+    plot_sensor_model()
+
+    # test_motion_model()
     # # precache_sensor_model(m, cache_file)
-    # visualize_sensor_model(m, cache_file)
 
     # cache_file = 'cache/test_sensor_model.dat'
     # precache_sensor_model(m, cache_file)

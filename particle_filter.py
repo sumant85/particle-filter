@@ -4,6 +4,7 @@ from multiprocessing import Pool, Process, Queue
 import random
 import time
 
+from matplotlib import cm
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import mode
@@ -12,25 +13,29 @@ from models import MotionModel, RobotPose, SensorModel
 
 
 def get_random_particles(r_map, num_particles):
-    # np.random.seed(87)
-    idx = np.where(r_map.prob_map > 0.8)
+    np.random.seed(1)
+    idx = np.where(r_map.prob_map > 0.9)
 
-    # random.seed(3)
+    random.seed(9)
     rand_idx = random.sample(range(len(idx[0])), num_particles)
 
-    # TODO: Should theta also be randomized?
-    # np.random.seed(8)
-    rand_theta = np.random.uniform(-np.pi, np.pi, num_particles)
+    np.random.seed(11)
+    rand_theta = np.random.randint(-180, 180, num_particles)
 
-    return [RobotPose(idx[0][rand_idx[i]], idx[1][rand_idx[i]], rand_theta[i])
+    return [RobotPose(idx[0][rand_idx[i]], idx[1][rand_idx[i]], np.deg2rad(rand_theta[i]))
             for i in range(len(rand_idx))]
 
 
 def get_next_particle(particle, sensor_model, motion_model, prev_pose, curr_pose, laser_readings):
     new_p = motion_model.sample(prev_pose, curr_pose, particle)
-    wt = sensor_model.map.prob_map[new_p.x][new_p.y]
-    if wt > 0:
-        wt *= sensor_model.sample_list(new_p, laser_readings)
+    try:
+        wt = sensor_model.map.prob_map[new_p.x][new_p.y]
+        if wt < 0.9:
+            raise Exception()
+    except:
+        return new_p, 0
+
+    wt *= sensor_model.sample_list(new_p, laser_readings)
     return new_p, wt
 
 
@@ -46,28 +51,33 @@ def run_filter_batch(particles, sensor_model, motion_model, prev_pose, curr_pose
     return new_particles, weights
 
 
+GLOB_SCAT_HANDLE = None
+GLOB_PLOT = None
 def show_particles(r_map, particles, block=True):
-    from matplotlib import cm
+    global GLOB_SCAT_HANDLE
+    global GLOB_PLOT
     arr = np.copy(r_map.prob_map).T
-    plt.figure()
-    plt.imshow(arr, cmap=cm.gray)
-    for p in particles:
-        plt.scatter(p.x, p.y, marker='+')
+    if GLOB_SCAT_HANDLE is None:
+        plt.figure()
+        GLOB_PLOT = plt.imshow(arr, cmap=cm.gray, origin='lower')
+    else:
+        GLOB_SCAT_HANDLE.remove()
+    GLOB_SCAT_HANDLE = plt.scatter([p.x for p in particles], [p.y for p in particles], marker='+')
+    plt.draw()
     plt.show(block=block)
+    time.sleep(1)
 
 
-def run_particle_filter(log_file, r_map, num_particles, multiprocess=True):
+def run_particle_filter(log_file, r_map, num_particles):
     particles = get_random_particles(r_map, num_particles)
-    show_particles(r_map, particles)
     motion_model = MotionModel()
     sensor_model = SensorModel(r_map)
 
-    # if multiprocess:
-    #     pool = Pool(processes=5)
-
+    # show_particles(r_map, particles, block=True)
     prev_pose = None
     with open(log_file, 'r') as fp:
         num_iterations = 0
+        prev_ts = 0
         for line in fp:
             arr = line.strip().split(' ')
             # FIXME TODO Currently ignoring all O readings in log, ie depending purely on
@@ -84,31 +94,20 @@ def run_particle_filter(log_file, r_map, num_particles, multiprocess=True):
 
             # Since we are being given laser pose anyways, robot pose is immaterial
             lsr_pose = RobotPose(float(arr[4]) / 10, float(arr[5]) / 10, float(arr[6]))
-            if lsr_pose.theta > np.pi:
-                assert False
+            assert np.abs(lsr_pose.theta) <= np.pi
 
             if prev_pose:
+                delta_ts = (timestamp - prev_ts)
+                if lsr_pose.distance_from(prev_pose) < 2 or delta_ts < 2 or timestamp < 15:
+                    print 'Continuing due to lack of movement'
+                    continue
+
+                print 'delta_ts ', delta_ts
+                print timestamp
+                print '------------------'
+                prev_ts = timestamp
                 new_particles = []
                 weights = []
-                # TODO: Earlier code was too slow so we added parallel processing. No longer
-                # required after optimizations in sensor model.
-                # if multiprocess:
-                #     results = []
-                #     batch_size = num_particles/5
-                #     for i in range(num_particles/batch_size):
-                #         start_idx = i * batch_size
-                #         end_idx = (i+1) * batch_size
-                #         res = pool.apply_async(run_filter_batch,
-                #                                (particles, sensor_model, motion_model,
-                #                                 prev_pose, lsr_pose, laser_readings,
-                #                                 start_idx, end_idx,))
-                #         results.append(res)
-                #
-                #     for res in results:
-                #         p, w = res.get()
-                #         new_particles.extend(p)
-                #         weights.extend(w)
-                # else:
                 for particle in particles:
                     p, w = get_next_particle(particle, sensor_model, motion_model,
                                              prev_pose, lsr_pose, laser_readings)
@@ -116,6 +115,7 @@ def run_particle_filter(log_file, r_map, num_particles, multiprocess=True):
                         new_particles.append(p)
                         weights.append(w)
 
+                show_particles(r_map, new_particles, False)
                 weights /= np.sum(weights)
 
                 new_particles_idx = \
@@ -125,11 +125,11 @@ def run_particle_filter(log_file, r_map, num_particles, multiprocess=True):
 
                 # Here we randomly add 1000 particles after every couple of iterations
                 # to prevent the filter from converging to an incorrect value. The existing
-                # particles are twice as likely to be chosen over the new particles
-                if num_iterations % 5 == 0:
-                    weights = [3.0 for _x in range(num_particles)]
+                # particles are thrice as likely to be chosen over the new particles
+                if len(new_particles) < 0.2 * num_particles:
+                    weights = [4.0 for _x in range(num_particles)]
 
-                    num_rand = int(num_particles * 0.1)
+                    num_rand = int(num_particles * 0.2)
                     rand_particles = get_random_particles(r_map, num_rand)
                     weights.extend([1.0 for _x in range(num_rand)])
 
@@ -138,20 +138,14 @@ def run_particle_filter(log_file, r_map, num_particles, multiprocess=True):
 
                     particles.extend(rand_particles)
                     new_particles_idx = \
-                    np.random.choice(np.array(range(int(num_particles * 1.1))), size=num_particles,
+                    np.random.choice(np.array(range(int(num_particles * 1.2))), size=num_particles,
                                      replace=True, p=weights)
                     particles = [particles[_x] for _x in new_particles_idx]
 
             prev_pose = lsr_pose
 
-            if num_iterations > 15:
-                print '#########################'
-                print timestamp
-                num_iterations = 0
-                show_particles(r_map, particles)
-
 
 if __name__ == '__main__':
     from map import Map
     m = Map.from_file('map/wean.dat', 800, 800)
-    run_particle_filter('log/robotdata1.log', m, 2000, False)
+    run_particle_filter('log/robotdata1.log', m, 8000)
