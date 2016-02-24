@@ -52,14 +52,6 @@ class MotionModel(object):
         alpha3 = 0.12
         alpha4 = 0.12
 
-        # To avoid the standard confusion between matrix indices and x, y coordinates,
-        # we declare new variables xa_* and ya_* which represent the coordinates
-        # along those axes. The axes are oriented as are normally done in geometry.
-        # FIXME We should not do this for the odometry frame maybe??
-        # xa_prev = prev_rf.y
-        # xa_curr = curr_rf.y
-        # ya_prev = prev_rf.x
-        # ya_curr = curr_rf.x
         xa_prev = prev_rf.x
         xa_curr = curr_rf.x
         ya_prev = prev_rf.y
@@ -205,7 +197,7 @@ class SensorModel(object):
         # TODO: tweak parameters
         # TODO: The exponential distribution is not looking very nice. Should we try shifting it
         # towards the mean in some way?
-        sigma_hit = 1.2  # decimeters
+        sigma_hit = 2  # decimeters
         lamda_short = 0.03
 
         z_hit = 0.67
